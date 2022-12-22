@@ -7,7 +7,7 @@ import scipy.stats as sstats
 import trimesh
 from autolab_core import Logger, RigidTransform
 
-from .constants import KEY_SEP_TOKEN, TEST_ID, TRAIN_ID
+from .constants import KEY_SEP_TOKEN
 from .random_variables import CameraRandomVariable
 from .states import CameraState, HeapAndCameraState, HeapState, ObjectState
 
@@ -63,7 +63,7 @@ class HeapStateSpace(gym.Space):
         min_heap_center = np.array(config["center"]["min"])  # [-0.1,-0.1]
         max_heap_center = np.array(config["center"]["max"])  # [0.1,0.1]
         self.heap_center_space = gym.spaces.Box(
-            min_heap_center, max_heap_center, dtype=np.float64
+            min_heap_center, max_heap_center, dtype=np.float32
         )
 
         # Set up object configs
@@ -74,14 +74,14 @@ class HeapStateSpace(gym.Space):
             obj_config["planar_translation"]["max"], 2 * np.pi
         ]
         self.obj_planar_pose_space = gym.spaces.Box(
-            min_obj_pose, max_obj_pose, dtype=np.float64
+            min_obj_pose, max_obj_pose, dtype=np.float32
         )
 
         # bounds of object drop orientation
         min_sph_coords = np.array([0.0, 0.0])
         max_sph_coords = np.array([2 * np.pi, np.pi])
         self.obj_orientation_space = gym.spaces.Box(
-            min_sph_coords, max_sph_coords, dtype=np.float64
+            min_sph_coords, max_sph_coords, dtype=np.float32
         )
 
         # bounds of center of mass
@@ -96,13 +96,12 @@ class HeapStateSpace(gym.Space):
         min_workspace_trans = np.array(workspace_config["min"])  # [-0.2,-0.25,0.0]
         max_workspace_trans = np.array(workspace_config["max"])  # [0.2,0.25,0.3]
         self.workspace_space = gym.spaces.Box(
-            min_workspace_trans, max_workspace_trans, dtype=np.float64
+            min_workspace_trans, max_workspace_trans, dtype=np.float32
         )
 
         # Setup object keys and directories
         object_keys = []
         mesh_filenames = []
-        self._train_pct = obj_config["train_pct"]  # 0.8
         num_objects = obj_config["num_objects"]  # 50
         self._mesh_dir = obj_config["mesh_dir"]  # datasets/objects/meshes/
         if not os.path.isabs(self._mesh_dir):  # 更改为绝对路径
@@ -129,12 +128,6 @@ class HeapStateSpace(gym.Space):
         # 洗牌，从 77 个物品中挑选 50 个
         self.all_object_keys = list(np.array(object_keys)[inds][:num_objects])
         all_mesh_filenames = list(np.array(mesh_filenames)[inds][:num_objects])
-        self.train_keys = self.all_object_keys[
-            : int(len(self.all_object_keys) * self._train_pct)
-        ]  # 前 80% 属于 train_keys
-        self.test_keys = self.all_object_keys[
-            int(len(self.all_object_keys) * self._train_pct) :
-        ]  # 后 20% 属于 test_keys
         self.obj_ids = dict(
             [(key, i + 1) for i, key in enumerate(self.all_object_keys)]
         )
@@ -143,11 +136,6 @@ class HeapStateSpace(gym.Space):
             self.mesh_filenames.update({k: v})
             for k, v in zip(self.all_object_keys, all_mesh_filenames)
         ]
-
-        if (len(self.test_keys) == 0 and self._train_pct < 1.0) or (
-            len(self.train_keys) == 0 and self._train_pct > 0.0
-        ):
-            raise ValueError("Not enough objects for train/test split!")
 
     @property
     def obj_keys(self):
@@ -169,29 +157,10 @@ class HeapStateSpace(gym.Space):
     def obj_id_map(self, id_map):
         self.obj_ids = id_map
 
-    @property
-    def obj_splits(self):
-        obj_splits = {}
-        for key in self.all_object_keys:
-            if key in self.train_keys:
-                obj_splits[key] = TRAIN_ID
-            else:
-                obj_splits[key] = TEST_ID
-        return obj_splits
-
-    def set_splits(self, obj_splits):
-        self.train_keys = []
-        self.test_keys = []
-        for k in obj_splits.keys():
-            if obj_splits[k] == TRAIN_ID:
-                self.train_keys.append(k)
-            else:
-                self.test_keys.append(k)
-
     def in_workspace(self, pose):
         """Check whether a pose is in the workspace."""
         # [-0.2,-0.25,0.0] ~ [0.2,0.25,0.3]
-        return self.workspace_space.contains(pose.translation)
+        return self.workspace_space.contains(np.array(pose.translation,dtype=np.float32))
 
     def sample(self):
         """Samples a state from the space
@@ -210,16 +179,16 @@ class HeapStateSpace(gym.Space):
         for work_key, work_config in workspace_objs.items():
 
             # make paths absolute
-            mesh_filename = work_config["mesh_filename"]  # data/bin/bin.obj
-            pose_filename = work_config["pose_filename"]  # data/bin/bin_pose.tf
-
-            if not os.path.isabs(mesh_filename):  # 更改为绝对路径
+            mesh_filename = work_config["mesh_filename"]  # datasets/bin/bin.obj
+            pose_filename = work_config["pose_filename"]  # datasets/bin/bin_pose.tf
+            # 更改为绝对路径
+            if not os.path.isabs(mesh_filename):
                 mesh_filename = os.path.join(
                     os.path.dirname(os.path.realpath(__file__)),
                     "..",
                     mesh_filename,
                 )
-            if not os.path.isabs(pose_filename):  # 更改为绝对路径
+            if not os.path.isabs(pose_filename):
                 pose_filename = os.path.join(
                     os.path.dirname(os.path.realpath(__file__)),
                     "..",
@@ -230,22 +199,15 @@ class HeapStateSpace(gym.Space):
             mesh = trimesh.load_mesh(mesh_filename)
             mesh.density = self.obj_density  # 4000
             pose = RigidTransform.load(pose_filename)
+            print(work_key,"pose: ",pose)
             workspace_obj = ObjectState(
                 "{}{}0".format(work_key, KEY_SEP_TOKEN), mesh, pose
             )
-            self._physics_engine.add(workspace_obj, static=True)
+            self._physics_engine.add(workspace_obj, static=True)  # 加到环境中，不做动态仿真。
             workspace_obj_states.append(workspace_obj)
 
         # sample state
-        train = True
-        if np.random.rand() > self._train_pct:  # 0.8
-            train = False
-            sample_keys = self.test_keys
-            self._logger.info("Sampling from test")
-        else:
-            sample_keys = self.train_keys
-            self._logger.info("Sampling from train")
-
+        sample_keys = self.all_object_keys
         total_num_objs = len(sample_keys)
 
         # sample object ids
@@ -300,7 +262,7 @@ class HeapStateSpace(gym.Space):
             elev = obj_orientation[1]
             T_obj_table = RigidTransform.sph_coords_to_pose(
                 az, elev
-            ).as_frames("obj", "world")  # Tra=[0,0,0], Rot=3x3, Qtn=4, t^T_o, 感觉world应该是table？
+            ).as_frames("obj", "table")  # Tra=[0,0,0], Rot=3x3, Qtn=4, t^T_o
 
             # sample object planar pose
             obj_planar_pose = self.obj_planar_pose_space.sample()  # [x,y,theta]
@@ -403,12 +365,7 @@ class HeapStateSpace(gym.Space):
         # Stop physics engine
         self._physics_engine.stop()
 
-        # add metadata for heap state and return it
-        metadata = {"split": TRAIN_ID}
-        if not train:
-            metadata["split"] = TEST_ID
-
-        return HeapState(workspace_obj_states, objs_in_heap, metadata=metadata)
+        return HeapState(workspace_obj_states, objs_in_heap)
 
 
 class HeapAndCameraStateSpace(gym.Space):

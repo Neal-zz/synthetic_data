@@ -31,7 +31,7 @@ class BinHeapEnv(gym.Env):
         self._scene = None
         self._physics_engine = PybulletPhysicsEngine(
             urdf_cache_dir=config["urdf_cache_dir"], debug=config["debug"]
-        )  # datasets/objects/urdf/cache/, false
+        )  # datasets/objects/urdf/cache/
         self._state_space = HeapAndCameraStateSpace(
             self._physics_engine, self._state_space_config
         )
@@ -138,6 +138,7 @@ class BinHeapEnv(gym.Env):
         )
 
         # add workspace objects
+        # ['bin~0', 'plane~0']
         for obj_key in self.state.workspace_keys:
             obj_state = self.state[obj_key]
             obj_mesh = Mesh.from_trimesh(obj_state.mesh, material=material)
@@ -145,17 +146,11 @@ class BinHeapEnv(gym.Env):
             scene.add(obj_mesh, pose=T_obj_world, name=obj_key)
 
         # add scene objects
-        # print(self.state.obj_keys)
+        # ['ycb~011_banana~1', ...]
         for obj_key in self.state.obj_keys:
-            # print("obj_key:\n")
-            # print(obj_key)
             obj_state = self.state[obj_key]
-            # print("obj_state:\n")
-            # print(obj_state)
             obj_mesh = Mesh.from_trimesh(obj_state.mesh, material=material)
             T_obj_world = obj_state.pose.matrix
-            # print("T:\n")
-            # print(T_obj_world)
             scene.add(obj_mesh, pose=T_obj_world, name=obj_key)
 
         # add light (for color rendering)

@@ -44,7 +44,7 @@ class PybulletPhysicsEngine(PhysicsEngine):
         PhysicsEngine.__init__(self)
         self._physics_client = None
         self._debug = debug
-        self._urdf_cache_dir = urdf_cache_dir
+        self._urdf_cache_dir = urdf_cache_dir  # datasets/objects/urdf/cache/
         if not os.path.isabs(self._urdf_cache_dir):
             self._urdf_cache_dir = os.path.join(
                 os.getcwd(), self._urdf_cache_dir

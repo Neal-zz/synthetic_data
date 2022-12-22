@@ -19,13 +19,6 @@ from autolab_core import (
 
 sys.path.append(os.getcwd())  # /home/neal/projects/synthetic_data, used for input syn module.
 from syn.bin_heap_env import BinHeapEnv
-from syn.constants import (
-    ENVIRONMENT_KEY,
-    JSON_INDENT,
-    POINT_DIM,
-    POSE_DIM,
-    TRAIN_ID,
-)
 
 SEED = 744
 
@@ -58,10 +51,6 @@ def generate_segmask_dataset(
     num_images_per_state = config["num_images_per_state"]              # 5
     states_per_garbage_collect = config["states_per_garbage_collect"]  # 10
 
-    # read image parameters
-    # im_height = config["state_space"]["camera"]["im_height"]  # 384
-    # im_width = config["state_space"]["camera"]["im_width"]    # 512
-
     # create the dataset path and all subfolders if they don't exist
     if not os.path.exists(output_dataset_path):
         os.mkdir(output_dataset_path)  # new_dataset
@@ -90,17 +79,6 @@ def generate_segmask_dataset(
     state_id = 0
     while state_id < num_states:  # <100
 
-        # create env and set objects
-        create_start = time.time()
-        env = BinHeapEnv(config)
-        env.state_space.obj_id_map = obj_id_map
-        env.state_space.obj_keys = obj_keys
-        env.state_space.mesh_filenames = mesh_filenames
-        create_stop = time.time()
-        logger.info(
-            "Creating env took %.3f sec" % (create_stop - create_start)
-        )
-
         # sample states
         states_remaining = num_states - state_id
         # Number of states before garbage collection (due to pybullet memory issues)
@@ -117,7 +95,7 @@ def generate_segmask_dataset(
 
                 # render images
                 # 同一场景生成多个相机视角
-                for k in range(num_images_per_state):
+                for k in range(num_images_per_state):  # 5
 
                     # reset the camera
                     if num_images_per_state > 1:
