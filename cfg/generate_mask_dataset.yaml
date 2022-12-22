@@ -1,0 +1,14 @@
+num_states: 100                                     # Total number of states in dataset
+num_images_per_state: 5                             # Number of images per state
+states_per_garbage_collect: 10                      # Number of states before garbage collection (due to pybullet memory issues)
+log_rate: 1                                         # Rate at which to log dataset generation information
+debug: 0                                            # Debug flag to see physics simulation, set random seed
+urdf_cache_dir: datasets/objects/urdf/cache/        # Directory to store URDF files for meshes
+
+!include states.yaml
+!include mask_dataset.yaml
+
+images:
+  color: 1
+  depth: 1
+
