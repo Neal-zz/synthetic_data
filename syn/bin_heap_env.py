@@ -21,12 +21,11 @@ class BinHeapEnv(gym.Env):
 
     def __init__(self, config):
 
+        # read configs
         self._config = config  # (generate_mask_dataset.yaml)
-
-        # read subconfigs
         self._state_space_config = self._config["state_space"]
 
-        # initialize class variables
+        # initialize variables
         self._state = None
         self._scene = None
         self._physics_engine = PybulletPhysicsEngine(

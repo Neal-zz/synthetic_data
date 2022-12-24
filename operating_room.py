@@ -23,7 +23,7 @@ from syn.bin_heap_env import BinHeapEnv
 SEED = 744
 
 # set up logger
-logger = Logger.get_logger("syn/generate_dataset.py")
+logger = Logger.get_logger("operating_room.py")
 
 def generate_segmask_dataset(
     output_dataset_path, config
@@ -63,7 +63,7 @@ def generate_segmask_dataset(
 
     # create the log file. remove the old one.
     experiment_log_filename = os.path.join(
-        output_dataset_path, "dataset_generation.log"
+        output_dataset_path, "operating_room.log"
     )
     if os.path.exists(experiment_log_filename):
         os.remove(experiment_log_filename)
@@ -71,9 +71,9 @@ def generate_segmask_dataset(
 
     # Create initial env to generate metadata
     env = BinHeapEnv(config)
-    obj_id_map = env.state_space.obj_id_map  # stl 文件名 + id
-    obj_keys = env.state_space.obj_keys  # stl 文件名
-    mesh_filenames = env.state_space.mesh_filenames  # stl 文件地址
+    # obj_id_map = env.state_space.obj_id_map  # stl 文件名 + id
+    # obj_keys = env.state_space.obj_keys  # stl 文件名
+    # mesh_filenames = env.state_space.mesh_filenames  # stl 文件地址
 
     # generate states and images
     state_id = 0
@@ -147,9 +147,9 @@ def generate_segmask_dataset(
                 del env
                 gc.collect()
                 env = BinHeapEnv(config)
-                env.state_space.obj_id_map = obj_id_map
-                env.state_space.obj_keys = obj_keys
-                env.state_space.mesh_filenames = mesh_filenames
+                # env.state_space.obj_id_map = obj_id_map
+                # env.state_space.obj_keys = obj_keys
+                # env.state_space.mesh_filenames = mesh_filenames
 
         # garbage collect
         del env
@@ -164,9 +164,8 @@ if __name__ == "__main__":
 
     output_dataset_path = "output"
     config_filename = os.path.join(
-        os.path.dirname(os.path.realpath(__file__)),  # syn/../cfg/
-        "..",
-        "cfg/generate_mask_dataset.yaml",
+        os.path.dirname(os.path.realpath(__file__)),  # synthetic_data/
+        "cfg/generate_mask_dataset.yaml"
     )
 
     # turn relative paths absolute

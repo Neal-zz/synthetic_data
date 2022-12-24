@@ -44,13 +44,11 @@ class PybulletPhysicsEngine(PhysicsEngine):
         PhysicsEngine.__init__(self)
         self._physics_client = None
         self._debug = debug
-        self._urdf_cache_dir = urdf_cache_dir  # datasets/objects/urdf/cache/
+        self._urdf_cache_dir = urdf_cache_dir  # datasets/urdf/cache/
         if not os.path.isabs(self._urdf_cache_dir):
             self._urdf_cache_dir = os.path.join(
                 os.getcwd(), self._urdf_cache_dir
             )
-        if not os.path.exists(os.path.join(self._urdf_cache_dir, "plane")):
-            os.makedirs(os.path.join(self._urdf_cache_dir, "plane"))
 
     def add(self, obj, static=False):
 
@@ -60,7 +58,7 @@ class PybulletPhysicsEngine(PhysicsEngine):
             KEY_SEP_TOKEN.join(obj.key.split(KEY_SEP_TOKEN)[:-1]),
             "{}.urdf".format(
                 KEY_SEP_TOKEN.join(obj.key.split(KEY_SEP_TOKEN)[:-1])
-            ),
+            )
         )
         urdf_dir = os.path.dirname(urdf_filename)
         if not os.path.exists(urdf_filename):
@@ -79,7 +77,6 @@ class PybulletPhysicsEngine(PhysicsEngine):
 
             # Fix center of mass (for rendering) and density and export
             geometry = obj.mesh.copy()
-            geometry.apply_translation(-obj.mesh.center_mass)
             trimesh.exchange.export.export_urdf(geometry, urdf_dir)
 
         com = obj.mesh.center_mass
@@ -185,7 +182,7 @@ class PybulletPhysicsEngine(PhysicsEngine):
     def _create_scene(self):
         self._scene = Scene()
         camera = PerspectiveCamera(
-            yfov=0.833, znear=0.05, zfar=3.0, aspectRatio=1.0
+            yfov=0.833, znear=0.05, zfar=30.0, aspectRatio=1.0
         )
         cn = Node()
         cn.camera = camera
@@ -193,7 +190,7 @@ class PybulletPhysicsEngine(PhysicsEngine):
             [
                 [0.0, 1.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, -1.0, 0.88],
+                [0.0, 0.0, -1.0, 2.0],
                 [0.0, 0.0, 0.0, 1.0],
             ]
         )

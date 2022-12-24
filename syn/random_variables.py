@@ -21,11 +21,6 @@ class CameraRandomVariable(object):
         Other Parameters
         ----------
         focal_length :        Focal length of the camera
-            min : float
-            max : float
-        delta_optical_center: Change in optical center from neutral.
-            min : float
-            max : float
         radius:               Distance from camera to world origin.
             min : float
             max : float
@@ -53,18 +48,6 @@ class CameraRandomVariable(object):
 
         self.frame = config["name"]
 
-        # setup random variables
-        # camera
-        self.focal_rv = sstats.uniform(
-            loc=self.min_f, scale=self.max_f - self.min_f
-        )
-        self.cx_rv = sstats.uniform(
-            loc=self.min_cx, scale=self.max_cx - self.min_cx
-        )
-        self.cy_rv = sstats.uniform(
-            loc=self.min_cy, scale=self.max_cy - self.min_cy
-        )
-
         # viewsphere
         self.rad_rv = sstats.uniform(
             loc=self.min_radius, scale=self.max_radius - self.min_radius
@@ -90,28 +73,20 @@ class CameraRandomVariable(object):
     def _parse_config(self, config):
         """Reads parameters from the config into class members."""
         # camera params
-        self.min_f = config["focal_length"]["min"]
-        self.max_f = config["focal_length"]["max"]
-        self.min_delta_c = config["delta_optical_center"]["min"]
-        self.max_delta_c = config["delta_optical_center"]["max"]
+        self.focal_length = config["focal_length"]
         self.im_height = config["im_height"]
         self.im_width = config["im_width"]
-
         self.mean_cx = float(self.im_width - 1) / 2
         self.mean_cy = float(self.im_height - 1) / 2
-        self.min_cx = self.mean_cx + self.min_delta_c
-        self.max_cx = self.mean_cx + self.max_delta_c
-        self.min_cy = self.mean_cy + self.min_delta_c
-        self.max_cy = self.mean_cy + self.max_delta_c
 
         # viewsphere params
-        self.min_radius = config["radius"]["min"]
+        self.min_radius = config["radius"]["min"]  # 距离
         self.max_radius = config["radius"]["max"]
-        self.min_az = np.deg2rad(config["azimuth"]["min"])
+        self.min_az = np.deg2rad(config["azimuth"]["min"])  # 俯仰
         self.max_az = np.deg2rad(config["azimuth"]["max"])
         self.min_elev = np.deg2rad(config["elevation"]["min"])
         self.max_elev = np.deg2rad(config["elevation"]["max"])
-        self.min_roll = np.deg2rad(config["roll"]["min"])
+        self.min_roll = np.deg2rad(config["roll"]["min"])  # 翻滚
         self.max_roll = np.deg2rad(config["roll"]["max"])
 
         # params of translation in plane
@@ -170,9 +145,9 @@ class CameraRandomVariable(object):
         samples = []
         for i in range(size):
             # sample camera params
-            focal = self.focal_rv.rvs(size=1)[0]
-            cx = self.cx_rv.rvs(size=1)[0]
-            cy = self.cy_rv.rvs(size=1)[0]
+            focal = self.focal_length
+            cx = self.mean_cx
+            cy = self.mean_cy
 
             # sample viewsphere params
             radius = self.rad_rv.rvs(size=1)[0]
