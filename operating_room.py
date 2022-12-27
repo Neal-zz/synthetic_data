@@ -16,6 +16,10 @@ from autolab_core import (
     TensorDataset,
     YamlConfig,
 )
+import open3d as o3d
+
+#os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+#os.environ['PYOPENGL_PLATFORM'] = 'egl'  # pyrender backend.
 
 sys.path.append(os.getcwd())  # /home/neal/projects/synthetic_data, used for input syn module.
 from syn.bin_heap_env import BinHeapEnv
@@ -24,6 +28,47 @@ SEED = 744
 
 # set up logger
 logger = Logger.get_logger("operating_room.py")
+
+def depth2xyz(depth_map, main_cam_pose, cur_cam_pose,
+    fx, fy, cx, cy, down_sample, rm_x, rm_y, rm_z):
+    
+    h, w = np.mgrid[0:depth_map.shape[0],0:depth_map.shape[1]]
+    # add some noise.
+    z = (depth_map - np.ones([depth_map.shape[0], depth_map.shape[1]])*0.02 +
+        np.random.random([depth_map.shape[0],depth_map.shape[1]])*0.04)
+    x = (w-cx)*z/fx
+    y = (h-cy)*z/fy
+    xyz = np.dstack((x,y,z)).reshape(-1,3)
+
+    # down sample. 516x516 = 266K
+    pcd_num = int(depth_map.shape[0] * depth_map.shape[1] / 5)
+    xyz = xyz[np.random.choice(xyz.shape[0], pcd_num, replace=False), :]
+
+    # if it is not the first camera view
+    if np.linalg.norm(cur_cam_pose.translation-main_cam_pose.translation) > 0.001:
+        
+        # translate point clouds to the world view
+        xyz = (np.dot(cur_cam_pose.rotation, xyz.T).T + 
+            np.array([cur_cam_pose.translation]))
+        
+        # remove the floor
+        thesh = 0.03
+        xyz = xyz[~( xyz[:,2]<(thesh) )]
+        # remove the ceiling
+        xyz = xyz[~( xyz[:,2]>(rm_y-thesh) )]
+        # remove the wall
+        xyz = xyz[~( xyz[:,1]>(rm_z-thesh) )]
+        xyz = xyz[~( xyz[:,0]>(rm_x-thesh) )]
+        xyz = xyz[~( xyz[:,0]<(-rm_x+thesh) )]
+
+        # translate point clouds to the main camera view.
+        T_w_main = main_cam_pose.inverse()
+        xyz = (np.dot(T_w_main.rotation, xyz.T).T + 
+            np.array([T_w_main.translation]))
+        
+    xyz = np.hstack( (xyz[:,[2]], -xyz[:,[0]], -xyz[:,[1]]) )
+
+    return xyz
 
 def generate_segmask_dataset(
     output_dataset_path, config
@@ -40,6 +85,17 @@ def generate_segmask_dataset(
 
     # read subconfigs
     image_config = config["images"]
+
+    # read camera instrinsics
+    camera = config["state_space"]["camera"]
+    camera_f = camera["focal_length"]
+    camera_width = camera["im_width"]
+    camera_height = camera["im_height"]
+
+    # read room config
+    room = config["state_space"]["heap"]["workspace"]
+    room_halfWidth = float(room["width"])/2.0
+    room_depth = float(room["length"])/2.0
 
     # debugging
     debug = config["debug"]
@@ -60,6 +116,9 @@ def generate_segmask_dataset(
     depth_dir = os.path.join(output_dataset_path, "depth_ims")
     if image_config["depth"] and not os.path.exists(depth_dir):
         os.mkdir(depth_dir)
+    pcd_dir = os.path.join(output_dataset_path, "pcl_datas")
+    if not os.path.exists(pcd_dir):
+        os.mkdir(pcd_dir)
 
     # create the log file. remove the old one.
     experiment_log_filename = os.path.join(
@@ -71,9 +130,6 @@ def generate_segmask_dataset(
 
     # Create initial env to generate metadata
     env = BinHeapEnv(config)
-    # obj_id_map = env.state_space.obj_id_map  # stl 文件名 + id
-    # obj_keys = env.state_space.obj_keys  # stl 文件名
-    # mesh_filenames = env.state_space.mesh_filenames  # stl 文件地址
 
     # generate states and images
     state_id = 0
@@ -93,19 +149,38 @@ def generate_segmask_dataset(
                 env.reset()
                 state = env.state
 
-                # render images
-                # 同一场景生成多个相机视角
-                for k in range(num_images_per_state):  # 5
+                # 同一场景生成多个相机视角，拼接成一片点云
+                for k in range(num_images_per_state):  # 4
 
                     # reset the camera
-                    if num_images_per_state > 1:
-                        env.reset_camera()
+                    cur_cam_pose = env.reset_camera()
+                    # set w^T_cam and save b-box
+                    if k == 0:
+                        main_cam_pose = cur_cam_pose
+                        T_tar_main = main_cam_pose.inverse().dot(state.cart_pose)
+                        logger.info("b-box: [%.3f, %.3f]" % (
+                            T_tar_main.translation[2], -T_tar_main.translation[0]))
+
 
                     obs = env.render_camera_image(color=image_config["color"])
                     if image_config["color"]:
-                        color_obs, depth_obs = obs
+                        color_obs, depth_obs = obs  # depth_obs: np.array(np.float32)
                     else:
                         depth_obs = obs
+
+                    # from depth image to pcl data.
+                    if k == 0:
+                        points_data = depth2xyz(depth_obs, main_cam_pose, cur_cam_pose,
+                            camera_f, camera_f, float(camera_width-1)/2.0,
+                            float(camera_height-1)/2.0, num_images_per_state,
+                            room_halfWidth, state.ceiling_height, room_depth)
+                    else:    
+                        points_data = np.vstack( (points_data,
+                            depth2xyz(depth_obs, main_cam_pose, cur_cam_pose,
+                                camera_f, camera_f, float(camera_width-1)/2.0,
+                                float(camera_height-1)/2.0, num_images_per_state,
+                                room_halfWidth, state.ceiling_height, room_depth)) )
+                    
 
                     # Save depth image and semantic masks
                     if image_config["color"]:
@@ -114,7 +189,7 @@ def generate_segmask_dataset(
                                 color_dir,
                                 "image_{:06d}.png".format(
                                     num_images_per_state * state_id + k
-                                ),
+                                )
                             )
                         )
                     if image_config["depth"]:
@@ -123,9 +198,24 @@ def generate_segmask_dataset(
                                 depth_dir,
                                 "image_{:06d}.png".format(
                                     num_images_per_state * state_id + k
-                                ),
+                                )
                             )
                         )
+                
+                # downsample and save point clouds.
+                pcd_num = 40000
+                points_data = points_data[np.random.choice(
+                    points_data.shape[0], pcd_num, replace=False), :]
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(points_data[:, :3])
+                o3d.io.write_point_cloud(
+                    os.path.join(
+                        pcd_dir,
+                        "pcd_{:06d}.ply".format(
+                            num_images_per_state * state_id + k
+                        )
+                    ), pcd
+                )
 
                 # delete action objects
                 for obj_state in state.obj_states:
@@ -147,13 +237,11 @@ def generate_segmask_dataset(
                 del env
                 gc.collect()
                 env = BinHeapEnv(config)
-                # env.state_space.obj_id_map = obj_id_map
-                # env.state_space.obj_keys = obj_keys
-                # env.state_space.mesh_filenames = mesh_filenames
 
         # garbage collect
         del env
         gc.collect()
+        env = BinHeapEnv(config)
 
     logger.info(
         "Generated %d image datapoints" % (state_id * num_images_per_state)

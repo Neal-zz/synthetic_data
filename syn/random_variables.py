@@ -10,131 +10,82 @@ class CameraRandomVariable(object):
     """
 
     def __init__(self, config):
-        """Initialize a CameraRandomVariable.
-        Parameters
-        ----------
-        config : autolab_core.YamlConfig
-            configuration containing parameters of random variable
-        Notes
-        -----
-        Required parameters of config are specified in Other Parameters
-        Other Parameters
-        ----------
-        focal_length :        Focal length of the camera
-        radius:               Distance from camera to world origin.
-            min : float
-            max : float
-        azimuth:              Azimuth (angle from x-axis) of camera in degrees.
-            min : float
-            max : float
-        elevation:            Elevation (angle from z-axis) of camera in degrees.
-            min : float
-            max : float
-        roll:                 Roll (angle about view direction) of camera in degrees.
-            min : float
-            max : float
-        x:                    Translation of world center in x axis.
-            min : float
-            max : float
-        y:                    Translation of world center in y axis.
-            min : float
-            max : float
-        im_height : float     Height of image in pixels.
-        im_width : float      Width of image in pixels.
-        """
+
         # read params
         self.config = config
         self._parse_config(config)
-
-        self.frame = config["name"]
 
         # viewsphere
         self.rad_rv = sstats.uniform(
             loc=self.min_radius, scale=self.max_radius - self.min_radius
         )
-        self.elev_rv = sstats.uniform(
-            loc=self.min_elev, scale=self.max_elev - self.min_elev
+        self.hei_rv = sstats.uniform(
+            loc=self.min_height, scale=self.max_height - self.min_height
         )
-        self.az_rv = sstats.uniform(
-            loc=self.min_az, scale=self.max_az - self.min_az
-        )
-        self.roll_rv = sstats.uniform(
-            loc=self.min_roll, scale=self.max_roll - self.min_roll
+        self.the_rv = sstats.uniform(
+            loc=self.min_theta, scale=self.max_theta - self.min_theta
         )
 
         # table translation
         self.tx_rv = sstats.uniform(
             loc=self.min_x, scale=self.max_x - self.min_x
         )
-        self.ty_rv = sstats.uniform(
-            loc=self.min_y, scale=self.max_y - self.min_y
-        )
 
     def _parse_config(self, config):
         """Reads parameters from the config into class members."""
         # camera params
-        self.focal_length = config["focal_length"]
-        self.im_height = config["im_height"]
-        self.im_width = config["im_width"]
-        self.mean_cx = float(self.im_width - 1) / 2
-        self.mean_cy = float(self.im_height - 1) / 2
+        self.frame = config["name"]                 # camera
+        self.focal_length = config["focal_length"]  # 365
+        self.im_height = config["im_height"]        # 512
+        self.im_width = config["im_width"]          # 512
+        self.mean_cx = float(self.im_width - 1) / 2.0
+        self.mean_cy = float(self.im_height - 1) / 2.0
+        self.threshold = config["threshold"]        # 4
 
         # viewsphere params
         self.min_radius = config["radius"]["min"]  # 距离
         self.max_radius = config["radius"]["max"]
-        self.min_az = np.deg2rad(config["azimuth"]["min"])  # 俯仰
-        self.max_az = np.deg2rad(config["azimuth"]["max"])
-        self.min_elev = np.deg2rad(config["elevation"]["min"])
-        self.max_elev = np.deg2rad(config["elevation"]["max"])
-        self.min_roll = np.deg2rad(config["roll"]["min"])  # 翻滚
-        self.max_roll = np.deg2rad(config["roll"]["max"])
+        self.min_height = config["height"]["min"]
+        self.max_height = config["height"]["max"]
+        self.min_theta = np.deg2rad(config["theta"]["min"])
+        self.max_theta = np.deg2rad(config["theta"]["max"])
 
         # params of translation in plane
         self.min_x = config["x"]["min"]
         self.max_x = config["x"]["max"]
-        self.min_y = config["y"]["min"]
-        self.max_y = config["y"]["max"]
 
-    def camera_to_world_pose(self, radius, elev, az, roll, x, y):
+    def camera_to_world_pose(self, cart_pos, radius, height, theta, x):
         """Convert spherical coords to a camera pose in the world."""
         # generate camera center from spherical coords
-        delta_t = np.array([x, y, 0])
-        camera_z = np.array([sph2cart(radius, az, elev)]).squeeze()
+        delta_t = np.array([x*np.cos(theta) + cart_pos[0],
+            x*np.sin(theta) + cart_pos[1], height])
+        camera_z = np.array([radius*np.sin(theta),
+            -radius*np.cos(theta), 0])
         camera_center = camera_z + delta_t
+        camera_center[0] = np.min((np.max((camera_center[0], -self.threshold)),
+            self.threshold))
         camera_z = -camera_z / np.linalg.norm(camera_z)
 
         # find the canonical camera x and y axes
         camera_x = np.array([camera_z[1], -camera_z[0], 0])
-        x_norm = np.linalg.norm(camera_x)
-        if x_norm == 0:
-            camera_x = np.array([1, 0, 0])
-        else:
-            camera_x = camera_x / x_norm
+        camera_x = camera_x / np.linalg.norm(camera_x)
         camera_y = np.cross(camera_z, camera_x)
         camera_y = camera_y / np.linalg.norm(camera_y)
 
-        # Reverse the x direction if needed so that y points down
-        if camera_y[2] > 0:
-            camera_x = -camera_x
-            camera_y = np.cross(camera_z, camera_x)
-            camera_y = camera_y / np.linalg.norm(camera_y)
-
-        # rotate by the roll
+        # get w^T_cam
         R = np.vstack((camera_x, camera_y, camera_z)).T
-        roll_rot_mat = transformations.rotation_matrix(
-            roll, camera_z, np.zeros(3)
-        )[:3, :3]
-        R = roll_rot_mat.dot(R)
         T_camera_world = RigidTransform(
             R, camera_center, from_frame=self.frame, to_frame="world"
         )
 
         return T_camera_world
 
-    def sample(self, size=1):
+    def sample(self, cart_pos, size=1):
         """Sample random variables from the model.
         Parameters
         ----------
+        cart_pos: [x, y, 0]
+            position of the cart.
         size : int
             number of sample to take
         Returns
@@ -145,22 +96,20 @@ class CameraRandomVariable(object):
         samples = []
         for i in range(size):
             # sample camera params
-            focal = self.focal_length
-            cx = self.mean_cx
-            cy = self.mean_cy
+            focal = self.focal_length  # 365
+            cx = self.mean_cx          # 255.5?
+            cy = self.mean_cy          # 255.5?
 
             # sample viewsphere params
             radius = self.rad_rv.rvs(size=1)[0]
-            elev = self.elev_rv.rvs(size=1)[0]
-            az = self.az_rv.rvs(size=1)[0]
-            roll = self.roll_rv.rvs(size=1)[0]
+            height = self.hei_rv.rvs(size=1)[0]
+            theta = self.the_rv.rvs(size=1)[0]
 
             # sample plane translation
             tx = self.tx_rv.rvs(size=1)[0]
-            ty = self.ty_rv.rvs(size=1)[0]
 
             # convert to pose and intrinsics
-            pose = self.camera_to_world_pose(radius, elev, az, roll, tx, ty)
+            pose = self.camera_to_world_pose(cart_pos, radius, height, theta, tx)
             intrinsics = CameraIntrinsics(
                 self.frame,
                 fx=focal,

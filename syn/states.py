@@ -1,6 +1,5 @@
 import numpy as np
 
-
 class State(object):
     """Abstract class for states"""
 
@@ -45,10 +44,12 @@ class HeapState(State):
         state of all objects in a heap
     """
 
-    def __init__(self, workspace_states, obj_states, metadata={}):
+    def __init__(self, workspace_states, obj_states, cart_pose, ceiling_height, metadata={}):
         self.workspace_states = workspace_states
         self.obj_states = obj_states
         self.metadata = metadata
+        self.cart_pose = cart_pose
+        self.ceiling_height = ceiling_height
 
     @property
     def workspace_keys(self):
@@ -125,6 +126,9 @@ class CameraState(State):
     def yfov(self):
         return 2.0 * np.arctan(self.height / (2.0 * self.intrinsics.fy))
 
+    @property
+    def cam_pose(self):
+        return self.pose
 
 class HeapAndCameraState(object):
     """State of a heap and camera."""

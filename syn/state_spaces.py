@@ -7,10 +7,10 @@ import scipy.stats as sstats
 import trimesh
 from autolab_core import Logger, RigidTransform
 
-from .constants import KEY_SEP_TOKEN
 from .random_variables import CameraRandomVariable
 from .states import CameraState, HeapAndCameraState, HeapState, ObjectState
 
+KEY_SEP_TOKEN = "~"
 
 class CameraStateSpace(gym.Space):
     """State space for a camera."""
@@ -24,9 +24,9 @@ class CameraStateSpace(gym.Space):
         # random variable for pose of camera
         self.camera_rv = CameraRandomVariable(config)
 
-    def sample(self):
+    def sample(self, cart_pos):
         """Sample a camera state."""
-        pose, intrinsics = self.camera_rv.sample(size=1)
+        pose, intrinsics = self.camera_rv.sample(cart_pos, size=1)
         return CameraState(self.frame, pose, intrinsics)
 
 
@@ -45,26 +45,27 @@ class HeapStateSpace(gym.Space):
         # read subconfigs
         obj_config = config["objects"]
         workspace_config = config["workspace"]
-        if (workspace_config["width"] < 9 or workspace_config["width"] > 12 or
-            workspace_config["length"] < 12):
+        if (workspace_config["width"] < 6 or workspace_config["width"] > 10 or
+            workspace_config["length"] < 8):
 
             self._logger.warning(
                 "Error room size... width: %s; length: %s".format(
                     workspace_config["width"], workspace_config["length"])
             )
 
-        self.box_size = workspace_config["width"] / 3.0
+        self.box_size = workspace_config["box_size"]  # 2
         self.num_objs = 7
         self.replace = config["replace"]  # 0
 
         # Set up object configs
         # bounds of object pose in each box
         # organized as [tx, ty, theta]
-        min_obj_pose = np.r_[obj_config["planar_translation"]["min"], 0]
-        max_obj_pose = np.r_[obj_config["planar_translation"]["max"], 2 * np.pi]
+        min_obj_pose = np.r_[obj_config["planar_translation"]["min"], obj_config["planar_translation"]["min"], 0]
+        max_obj_pose = np.r_[obj_config["planar_translation"]["max"], obj_config["planar_translation"]["max"], 2 * np.pi]
         self.obj_planar_pose_space = gym.spaces.Box(
             min_obj_pose, max_obj_pose, dtype=np.float32
         )
+        self.trans_range = max_obj_pose[0]-min_obj_pose[0]
 
         self.obj_density = 4000
 
@@ -120,27 +121,6 @@ class HeapStateSpace(gym.Space):
     def obj_keys(self):
         return self.all_object_keys
 
-    @obj_keys.setter
-    def obj_keys(self, keys):
-        self.all_object_keys = keys
-
-    @property
-    def num_objects(self):
-        return len(self.all_object_keys)
-
-    @property
-    def obj_id_map(self):
-        return self.obj_ids
-
-    @obj_id_map.setter
-    def obj_id_map(self, id_map):
-        self.obj_ids = id_map
-
-    def in_workspace(self, pose):
-        """Check whether a pose is in the workspace."""
-        # [-0.2,-0.25,0.0] ~ [0.2,0.25,0.3]
-        return True
-
     def sample(self):
         """Samples a state from the space
         Returns
@@ -152,7 +132,7 @@ class HeapStateSpace(gym.Space):
         # Start physics engine
         self._physics_engine.start()
 
-        # setup workspace
+        """ setup workspace."""
         workspace_obj_states = []
         workspace_objs = self._config["workspace"]["objects"]  # room & ceiling
         for work_key, work_config in workspace_objs.items():
@@ -177,18 +157,20 @@ class HeapStateSpace(gym.Space):
             # load mesh
             mesh = trimesh.load_mesh(mesh_filename)
             mesh.visual = trimesh.visual.ColorVisuals(mesh,
-                vertex_colors=np.append(np.random.random(3), np.random.random(1)/2.0+0.5))
+                vertex_colors=np.append(np.random.random(3), np.random.random(1)/2.0))
             mesh.density = self.obj_density  # 4000
             pose = RigidTransform.load(pose_filename)
+            if work_key == "ceiling":
+                self.ceiling_height = 3.5 + np.random.random(1)
+                pose.translation[2] = self.ceiling_height
+
             workspace_obj = ObjectState(
                 "{}{}0".format(work_key, KEY_SEP_TOKEN), mesh, pose
             )  # room~0
-            _, radius = trimesh.nsphere.minimum_nsphere(workspace_obj.mesh)
-            print(work_key, "radius: ", radius)
             self._physics_engine.add(workspace_obj, static=True)  # 加到环境中，不做动态仿真。
             workspace_obj_states.append(workspace_obj)
 
-        # sample target
+        """ sample target."""
         total_num_targets = len(self.all_target_keys)
         target_id = np.random.choice(
             np.arange(total_num_targets), size=1
@@ -206,40 +188,44 @@ class HeapStateSpace(gym.Space):
         obj_state_key = "{}{}{}".format(
             obj_key, KEY_SEP_TOKEN, 0
         )  # target1~0
-        obj = ObjectState(obj_state_key, obj_mesh)
-        _, radius = trimesh.nsphere.minimum_nsphere(obj.mesh)
-        print(obj_key, "radius: ", radius)
+        tar = ObjectState(obj_state_key, obj_mesh)
         self._logger.info(obj_state_key)
 
-        # sample object planar pose
+        # sample target's planar pose
         obj_planar_pose = self.obj_planar_pose_space.sample()  # [x,y,theta]
         theta = obj_planar_pose[2]
-        R_obj_world = RigidTransform.z_axis_rotation(theta)
-        t_obj_world = np.array(
-            [obj_planar_pose[0], obj_planar_pose[1], 0.0]
+        R_tar_world = RigidTransform.z_axis_rotation(theta)
+        t_tar_world = np.array(
+            [obj_planar_pose[0]/self.trans_range*self.box_size,
+            obj_planar_pose[1]-self.box_size/2.0, 0.0]
         )
-        obj.pose = RigidTransform(
-            rotation=R_obj_world,
-            translation=t_obj_world,
+        tar.pose = RigidTransform(
+            rotation=R_tar_world,
+            translation=t_tar_world,
             from_frame="obj",
             to_frame="world",
         )
 
-        self._physics_engine.add(obj, static=True)  # 静态
-        objs_in_heap.append(obj)
+        self._physics_engine.add(tar, static=True)  # 静态
+        objs_in_heap.append(tar)
 
-        # sample objects
+        """ sample objects."""
         total_num_objs = len(self.all_object_keys)
         num_objs = self.num_objs  # = 7
         obj_inds = np.random.choice(
             np.arange(total_num_objs), size=2*num_objs, replace=self.replace
-        )  # 1 代表能重复取值
+        )  # 0 代表不能重复取值
 
         # sample object's pose
         total_drops = 0
         while total_drops < num_objs:
 
             # load model
+            if total_drops == 6 and t_tar_world[0] < 0:
+                boxid = 8
+            else:
+                boxid = total_drops
+            
             obj_key = self.all_object_keys[obj_inds[total_drops]]
             obj_mesh = trimesh.load_mesh(self.mesh_filenames[obj_key])
             obj_mesh.visual = trimesh.visual.ColorVisuals(obj_mesh,
@@ -249,8 +235,6 @@ class HeapStateSpace(gym.Space):
                 obj_key, KEY_SEP_TOKEN, total_drops
             )  # drip1~0
             obj = ObjectState(obj_state_key, obj_mesh)
-            _, radius = trimesh.nsphere.minimum_nsphere(obj.mesh)
-            print(obj_key, "radius: ", radius)
             self._logger.info(obj_state_key)
 
             # sample object planar pose
@@ -258,8 +242,13 @@ class HeapStateSpace(gym.Space):
             theta = obj_planar_pose[2]
             R_obj_world = RigidTransform.z_axis_rotation(theta)
             t_obj_world = np.array(
-                [obj_planar_pose[0], obj_planar_pose[1], 0.0]
+                [obj_planar_pose[0] + (boxid%3)*self.box_size - self.box_size,
+                obj_planar_pose[1] - np.floor(boxid/3)*self.box_size + 1.5*self.box_size,
+                0.0]
             )
+            if obj_key[:5] == "light":
+                t_obj_world[2] = self.ceiling_height
+
             obj.pose = RigidTransform(
                 rotation=R_obj_world,
                 translation=t_obj_world,
@@ -274,7 +263,7 @@ class HeapStateSpace(gym.Space):
         # Stop physics engine
         self._physics_engine.stop()
 
-        return HeapState(workspace_obj_states, objs_in_heap)
+        return HeapState(workspace_obj_states, objs_in_heap, tar.pose, self.ceiling_height)
 
 
 class HeapAndCameraStateSpace(gym.Space):
@@ -290,40 +279,13 @@ class HeapAndCameraStateSpace(gym.Space):
         self.camera = CameraStateSpace(cam_config)
 
     @property
-    def obj_id_map(self):
-        return self.heap.obj_id_map
-
-    @obj_id_map.setter
-    def obj_id_map(self, id_map):
-        self.heap.obj_ids = id_map
-
-    @property
     def obj_keys(self):
         return self.heap.obj_keys
-
-    @obj_keys.setter
-    def obj_keys(self, keys):
-        self.heap.all_object_keys = keys
-
-    @property
-    def obj_splits(self):
-        return self.heap.obj_splits
-
-    def set_splits(self, splits):
-        self.heap.set_splits(splits)
-
-    @property
-    def mesh_filenames(self):
-        return self.heap.mesh_filenames
-
-    @mesh_filenames.setter
-    def mesh_filenames(self, fns):
-        self.heap.mesh_filenames = fns
 
     def sample(self):
         """Sample a state."""
         # sample individual states
         heap_state = self.heap.sample()
-        cam_state = self.camera.sample()
+        cam_state = self.camera.sample(heap_state.cart_pose.translation)
 
         return HeapAndCameraState(heap_state, cam_state)

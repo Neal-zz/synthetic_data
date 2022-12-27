@@ -1,8 +1,9 @@
 state_space:
   heap:
     workspace:          # Workspace boundaries
-      width: 9
-      length: 12
+      width: 7
+      length: 9
+      box_size: 2
 
       objects:          # static workspace objects
         room:
@@ -13,42 +14,35 @@ state_space:
           mesh_filename: datasets/ceiling/ceiling.stl
           pose_filename: datasets/ceiling/ceiling_pose.tf
         
-    replace: 1          # Sample objects with replacement?
+    replace: 0          # 0: unique.
 
     objects:
       target_mesh_dir: datasets/target/
       mesh_dir: datasets/objects/           # Directory containing meshes to be dropped    
       planar_translation:                   # Amount of translation around the center point to drop each object
         min:                                # Uniform random variable
-          - -0.25
-          - -0.25
+          - -0.5
         max:
-          - 0.25
-          - 0.25
+          - 0.5
 
   camera:
     name: camera
 
     im_width: 512                           # Image size
-    im_height: 384
-    focal_length: 560                       # Camera intrinsics: fx and fy
+    im_height: 512
+    focal_length: 365                       # Camera intrinsics: fx and fy
+    threshold: 3                            # max x of camera center.
 
-    x:                                      # Variation in x position and y position
-      min: -0.05
-      max: 0.05
-    y:
-      min: -0.05
-      max: 0.05
+    x:                                      # Variation in x position (camera coordinate)
+      min: -1
+      max: 1
 
-    radius:                                 # Uniform random variable for camera distance
-      min: 0.7
-      max: 0.9
-    elevation:                              # Uniform random variable for camera elevation
-      min: 0.01
-      max: 10
-    azimuth:                                # 偏航角
-      min: 0
-      max: 360
-    roll:                                   # 翻滚角
-      min: -10
-      max: 10
+    radius:
+      min: 2
+      max: 5
+    theta:
+      min: -45
+      max: 45
+    height:
+      min: 0.75
+      max: 1.20

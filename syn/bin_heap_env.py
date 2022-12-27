@@ -29,15 +29,15 @@ class BinHeapEnv(gym.Env):
         self._state = None
         self._scene = None
         self._physics_engine = PybulletPhysicsEngine(
-            urdf_cache_dir=config["urdf_cache_dir"], debug=config["debug"]
+            debug=config["debug"]
         )  # datasets/objects/urdf/cache/
         self._state_space = HeapAndCameraStateSpace(
             self._physics_engine, self._state_space_config
         )
 
-    @property
-    def config(self):
-        return self._config
+    # @property
+    # def config(self):
+    #     return self._config
 
     @property
     def state(self):
@@ -46,22 +46,6 @@ class BinHeapEnv(gym.Env):
     @property
     def camera(self):
         return self._camera
-
-    @property
-    def observation(self):
-        return self.render_camera_image()
-
-    @property
-    def scene(self):
-        return self._scene
-
-    @property
-    def num_objects(self):
-        return self.state.num_objs
-
-    @property
-    def state_space(self):
-        return self._state_space
 
     @property
     def obj_keys(self):
@@ -130,31 +114,43 @@ class BinHeapEnv(gym.Env):
             iter(scene.get_nodes(name=self.camera.frame))
         )
 
-        material = MetallicRoughnessMaterial(
-            baseColorFactor=np.array([1, 1, 1, 1.0]),
-            metallicFactor=0.2,
-            roughnessFactor=0.8,
-        )
-
         # add workspace objects
-        # ['bin~0', 'plane~0']
+        # ['room~0', 'ceiling~0']
         for obj_key in self.state.workspace_keys:
+
+            material = MetallicRoughnessMaterial(
+                baseColorFactor=np.append(np.random.random(3), 1.0),
+                metallicFactor=0.2,
+                roughnessFactor=0.8,
+            )
+
             obj_state = self.state[obj_key]
             obj_mesh = Mesh.from_trimesh(obj_state.mesh, material=material)
             T_obj_world = obj_state.pose.matrix
             scene.add(obj_mesh, pose=T_obj_world, name=obj_key)
 
         # add scene objects
-        # ['ycb~011_banana~1', ...]
+        # ['drip1~1', ...]
         for obj_key in self.state.obj_keys:
+            
+            material = MetallicRoughnessMaterial(
+                baseColorFactor=np.append(np.random.random(3), 1.0),
+                metallicFactor=0.2,
+                roughnessFactor=0.8,
+            )
+
             obj_state = self.state[obj_key]
-            obj_mesh = Mesh.from_trimesh(obj_state.mesh, material=material)
+            # smooth 设为 False，渲染图片就不再面片化。
+            obj_mesh = Mesh.from_trimesh(obj_state.mesh, material=material, smooth=False)
             T_obj_world = obj_state.pose.matrix
             scene.add(obj_mesh, pose=T_obj_world, name=obj_key)
 
         # add light (for color rendering)
-        light = DirectionalLight(color=np.ones(3), intensity=1.0)
-        scene.add(light, pose=np.eye(4))
+        light = DirectionalLight(color=np.ones(3), intensity=1)
+        light_pose = np.eye(4)
+        light_pose[1,3] = 3.0
+        light_pose[2,3] = 3.0
+        scene.add(light, pose=light_pose)
         ray_light_nodes = self._create_raymond_lights()
         [scene.add_node(rln) for rln in ray_light_nodes]
 
@@ -164,8 +160,10 @@ class BinHeapEnv(gym.Env):
         """Resets only the camera.
         Useful for generating image data for multiple camera views
         """
-        self._camera = self.state_space.camera.sample()
+        self._camera = self._state_space.camera.sample(self._state.cart_pose.translation)
         self._update_scene()
+
+        return self._camera.pose
 
     def reset(self):
         """Reset the environment."""
@@ -176,64 +174,14 @@ class BinHeapEnv(gym.Env):
         # reset scene
         self._reset_scene()
 
-    def view_3d_scene(self):
-        """Render the scene in a 3D viewer."""
-        if self.state is None or self.camera is None:
-            raise ValueError(
-                "Cannot render 3D scene before state is set! You can set the state with the reset() function"
-            )
-
-        Viewer(self.scene, use_raymond_lighting=True)
-
     def render_camera_image(self, color=True):
         """Render the camera image for the current scene."""
         renderer = OffscreenRenderer(self.camera.width, self.camera.height)
         flags = RenderFlags.NONE if color else RenderFlags.DEPTH_ONLY
         image = renderer.render(self._scene, flags=flags)
         renderer.delete()
+
         return image
-
-    def render_segmentation_images(self):
-        """Renders segmentation masks (modal and amodal) for each object in the state."""
-
-        full_depth = self.render_camera_image(color=False)
-        modal_data = np.zeros(
-            (full_depth.shape[0], full_depth.shape[1], len(self.obj_keys)),
-            dtype=np.uint8,
-        )
-        amodal_data = np.zeros(
-            (full_depth.shape[0], full_depth.shape[1], len(self.obj_keys)),
-            dtype=np.uint8,
-        )
-        renderer = OffscreenRenderer(self.camera.width, self.camera.height)
-        flags = RenderFlags.DEPTH_ONLY
-
-        # Hide all meshes
-        obj_mesh_nodes = [
-            next(iter(self._scene.get_nodes(name=k))) for k in self.obj_keys
-        ]
-        for mn in self._scene.mesh_nodes:
-            mn.mesh.is_visible = False
-
-        for i, node in enumerate(obj_mesh_nodes):
-            node.mesh.is_visible = True
-
-            depth = renderer.render(self._scene, flags=flags)
-            amodal_mask = depth > 0.0
-            modal_mask = np.logical_and(
-                (np.abs(depth - full_depth) < 1e-6), full_depth > 0.0
-            )
-            amodal_data[amodal_mask, i] = np.iinfo(np.uint8).max
-            modal_data[modal_mask, i] = np.iinfo(np.uint8).max
-            node.mesh.is_visible = False
-
-        renderer.delete()
-
-        # Show all meshes
-        for mn in self._scene.mesh_nodes:
-            mn.mesh.is_visible = True
-
-        return amodal_data, modal_data
 
     def _create_raymond_lights(self):
         thetas = np.pi * np.array([1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0])
