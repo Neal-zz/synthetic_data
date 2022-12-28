@@ -1,4 +1,4 @@
-num_states: 100                                     # Total number of states in dataset
+num_states: 2000                                    # Total number of states in dataset
 num_images_per_state: 4                             # Number of images per state
 states_per_garbage_collect: 10                      # Number of states before garbage collection (due to pybullet memory issues)
 log_rate: 1                                         # Rate at which to log dataset generation information

@@ -35,13 +35,17 @@ def depth2xyz(depth_map, main_cam_pose, cur_cam_pose,
     h, w = np.mgrid[0:depth_map.shape[0],0:depth_map.shape[1]]
     # add some noise.
     z = (depth_map - np.ones([depth_map.shape[0], depth_map.shape[1]])*0.02 +
-        np.random.random([depth_map.shape[0],depth_map.shape[1]])*0.04)
+        np.random.random([depth_map.shape[0], depth_map.shape[1]])*0.04)
     x = (w-cx)*z/fx
     y = (h-cy)*z/fy
     xyz = np.dstack((x,y,z)).reshape(-1,3)
 
+    # remove -depth point (empty points)
+    thresh = 0.04
+    xyz = xyz[~( xyz[:,2]<thresh )]
+
     # down sample. 516x516 = 266K
-    pcd_num = int(depth_map.shape[0] * depth_map.shape[1] / 5)
+    pcd_num = int(depth_map.shape[0] * depth_map.shape[1] / down_sample)
     xyz = xyz[np.random.choice(xyz.shape[0], pcd_num, replace=False), :]
 
     # if it is not the first camera view
@@ -52,14 +56,13 @@ def depth2xyz(depth_map, main_cam_pose, cur_cam_pose,
             np.array([cur_cam_pose.translation]))
         
         # remove the floor
-        thesh = 0.03
-        xyz = xyz[~( xyz[:,2]<(thesh) )]
+        xyz = xyz[~( xyz[:,2]<(thresh) )]
         # remove the ceiling
-        xyz = xyz[~( xyz[:,2]>(rm_y-thesh) )]
+        xyz = xyz[~( xyz[:,2]>(rm_y-thresh) )]
         # remove the wall
-        xyz = xyz[~( xyz[:,1]>(rm_z-thesh) )]
-        xyz = xyz[~( xyz[:,0]>(rm_x-thesh) )]
-        xyz = xyz[~( xyz[:,0]<(-rm_x+thesh) )]
+        xyz = xyz[~( xyz[:,1]>(rm_z-thresh) )]
+        xyz = xyz[~( xyz[:,0]>(rm_x-thresh) )]
+        xyz = xyz[~( xyz[:,0]<(-rm_x+thresh) )]
 
         # translate point clouds to the main camera view.
         T_w_main = main_cam_pose.inverse()
@@ -142,7 +145,7 @@ def generate_segmask_dataset(
 
             # log current rollout
             if state_id % config["log_rate"] == 0:  # state_id%1, log every time.
-                logger.info("State: %06d" % (state_id))
+                logger.info("State: %04d" % (state_id))
 
             try:
                 # reset env
@@ -158,8 +161,10 @@ def generate_segmask_dataset(
                     if k == 0:
                         main_cam_pose = cur_cam_pose
                         T_tar_main = main_cam_pose.inverse().dot(state.cart_pose)
-                        logger.info("b-box: [%.3f, %.3f]" % (
-                            T_tar_main.translation[2], -T_tar_main.translation[0]))
+                        tar_rotation = np.arctan2(-T_tar_main.rotation[0,1],T_tar_main.rotation[2,1])
+                        logger.info("b-box: [%.3f, %.3f, %.3f, %.3f]" % (
+                            T_tar_main.translation[2], -T_tar_main.translation[0],
+                            -T_tar_main.translation[1], tar_rotation))
 
 
                     obs = env.render_camera_image(color=image_config["color"])
@@ -183,21 +188,21 @@ def generate_segmask_dataset(
                     
 
                     # Save depth image and semantic masks
-                    if image_config["color"]:
+                    if image_config["color"] and k==0:
                         ColorImage(color_obs).save(
                             os.path.join(
                                 color_dir,
-                                "image_{:06d}.png".format(
-                                    num_images_per_state * state_id + k
+                                "image_{:04d}.png".format(
+                                    state_id
                                 )
                             )
                         )
-                    if image_config["depth"]:
+                    if image_config["depth"] and k==0:
                         DepthImage(depth_obs).save(
                             os.path.join(
                                 depth_dir,
-                                "image_{:06d}.png".format(
-                                    num_images_per_state * state_id + k
+                                "image_{:04d}.png".format(
+                                    state_id
                                 )
                             )
                         )
@@ -211,8 +216,8 @@ def generate_segmask_dataset(
                 o3d.io.write_point_cloud(
                     os.path.join(
                         pcd_dir,
-                        "pcd_{:06d}.ply".format(
-                            num_images_per_state * state_id + k
+                        "pcd_{:04d}.ply".format(
+                            state_id
                         )
                     ), pcd
                 )
@@ -243,9 +248,9 @@ def generate_segmask_dataset(
         gc.collect()
         env = BinHeapEnv(config)
 
-    logger.info(
-        "Generated %d image datapoints" % (state_id * num_images_per_state)
-    )
+    # logger.info(
+    #     "Generated %d image datapoints" % (state_id * num_images_per_state)
+    # )
 
 
 if __name__ == "__main__":

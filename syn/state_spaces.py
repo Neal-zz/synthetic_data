@@ -189,7 +189,7 @@ class HeapStateSpace(gym.Space):
             obj_key, KEY_SEP_TOKEN, 0
         )  # target1~0
         tar = ObjectState(obj_state_key, obj_mesh)
-        self._logger.info(obj_state_key)
+        # self._logger.info(obj_state_key)
 
         # sample target's planar pose
         obj_planar_pose = self.obj_planar_pose_space.sample()  # [x,y,theta]
@@ -235,7 +235,7 @@ class HeapStateSpace(gym.Space):
                 obj_key, KEY_SEP_TOKEN, total_drops
             )  # drip1~0
             obj = ObjectState(obj_state_key, obj_mesh)
-            self._logger.info(obj_state_key)
+            # self._logger.info(obj_state_key)
 
             # sample object planar pose
             obj_planar_pose = self.obj_planar_pose_space.sample()  # [x,y,theta]
