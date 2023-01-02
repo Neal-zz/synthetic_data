@@ -30,7 +30,7 @@ class BinHeapEnv(gym.Env):
         self._scene = None
         self._physics_engine = PybulletPhysicsEngine(
             debug=config["debug"]
-        )  # datasets/objects/urdf/cache/
+        )
         self._state_space = HeapAndCameraStateSpace(
             self._physics_engine, self._state_space_config
         )

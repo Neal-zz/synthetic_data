@@ -18,11 +18,9 @@ from autolab_core import (
 )
 import open3d as o3d
 
-#os.environ["PYOPENGL_PLATFORM"] = "osmesa"
-#os.environ['PYOPENGL_PLATFORM'] = 'egl'  # pyrender backend.
-
 sys.path.append(os.getcwd())  # /home/neal/projects/synthetic_data, used for input syn module.
 from syn.bin_heap_env import BinHeapEnv
+import syn.syn_utils as syn_utils
 
 SEED = 744
 
@@ -100,14 +98,20 @@ def generate_segmask_dataset(
     room_halfWidth = float(room["width"])/2.0
     room_depth = float(room["length"])/2.0
 
+    # read target config
+    target_config = config["state_space"]["heap"]["objects"]["target_size"]
+    target_l = float(target_config["l"])
+    target_w = float(target_config["w"])
+    target_h = float(target_config["h"])
+
     # debugging
     debug = config["debug"]
     if debug:
         np.random.seed(SEED)
 
     # read general parameters
-    num_states = config["num_states"]                                  # 100
-    num_images_per_state = config["num_images_per_state"]              # 5
+    num_states = config["num_states"]                                  # 2000
+    num_images_per_state = config["num_images_per_state"]              # 4
     states_per_garbage_collect = config["states_per_garbage_collect"]  # 10
 
     # create the dataset path and all subfolders if they don't exist
@@ -119,9 +123,9 @@ def generate_segmask_dataset(
     depth_dir = os.path.join(output_dataset_path, "depth_ims")
     if image_config["depth"] and not os.path.exists(depth_dir):
         os.mkdir(depth_dir)
-    pcd_dir = os.path.join(output_dataset_path, "pcl_datas")
-    if not os.path.exists(pcd_dir):
-        os.mkdir(pcd_dir)
+    pc_dir = os.path.join(output_dataset_path, "pc_datas")
+    if not os.path.exists(pc_dir):
+        os.mkdir(pc_dir)
 
     # create the log file. remove the old one.
     experiment_log_filename = os.path.join(
@@ -136,7 +140,7 @@ def generate_segmask_dataset(
 
     # generate states and images
     state_id = 0
-    while state_id < num_states:  # <100
+    while state_id < num_states:  # <2000
 
         # sample states
         states_remaining = num_states - state_id
@@ -152,6 +156,9 @@ def generate_segmask_dataset(
                 env.reset()
                 state = env.state
 
+                # output writer
+                bbox_writer = np.zeros((1,4),dtype=np.float32)
+
                 # 同一场景生成多个相机视角，拼接成一片点云
                 for k in range(num_images_per_state):  # 4
 
@@ -160,11 +167,19 @@ def generate_segmask_dataset(
                     # set w^T_cam and save b-box
                     if k == 0:
                         main_cam_pose = cur_cam_pose
+                        # save bbox: 1,4 (x,y,z,ori)
+                        # camera coordinate (x right, y downward, z forward)
                         T_tar_main = main_cam_pose.inverse().dot(state.cart_pose)
-                        tar_rotation = np.arctan2(-T_tar_main.rotation[0,1],T_tar_main.rotation[2,1])
+                        tar_rotation = np.arctan2(-T_tar_main.rotation[2,1],T_tar_main.rotation[0,1])
+                        # save to output coordinate (x right, y forward, z upward)
+                        bbox_writer[0,:] = [T_tar_main.translation[0],
+                            T_tar_main.translation[2], 0.75-T_tar_main.translation[1],
+                            tar_rotation]
+                        np.save(os.path.join(pc_dir, '%06d_bbox.npy'%(state_id)), bbox_writer)
+                        # logger
                         logger.info("b-box: [%.3f, %.3f, %.3f, %.3f]" % (
-                            T_tar_main.translation[2], -T_tar_main.translation[0],
-                            -T_tar_main.translation[1], tar_rotation))
+                            T_tar_main.translation[0], T_tar_main.translation[2],
+                            0.75-T_tar_main.translation[1], tar_rotation))
 
 
                     obs = env.render_camera_image(color=image_config["color"])
@@ -192,7 +207,7 @@ def generate_segmask_dataset(
                         ColorImage(color_obs).save(
                             os.path.join(
                                 color_dir,
-                                "image_{:04d}.png".format(
+                                "image_{:06d}.png".format(
                                     state_id
                                 )
                             )
@@ -201,7 +216,7 @@ def generate_segmask_dataset(
                         DepthImage(depth_obs).save(
                             os.path.join(
                                 depth_dir,
-                                "image_{:04d}.png".format(
+                                "image_{:06d}.png".format(
                                     state_id
                                 )
                             )
@@ -211,16 +226,48 @@ def generate_segmask_dataset(
                 pcd_num = 40000
                 points_data = points_data[np.random.choice(
                     points_data.shape[0], pcd_num, replace=False), :]
-                pcd = o3d.geometry.PointCloud()
-                pcd.points = o3d.utility.Vector3dVector(points_data[:, :3])
-                o3d.io.write_point_cloud(
-                    os.path.join(
-                        pcd_dir,
-                        "pcd_{:04d}.ply".format(
-                            state_id
-                        )
-                    ), pcd
-                )
+                # 坐标系转换：(x forward, y left, z upward)->(x right, y forward, z upward)
+                points_data = points_data[:,[1,0,2]]
+                points_data[:,0] *= -1
+                # 存为 ply 文件
+                # pcd = o3d.geometry.PointCloud()
+                # pcd.points = o3d.utility.Vector3dVector(points_data[:, :3])
+                # o3d.io.write_point_cloud(
+                #     os.path.join(
+                #         pc_dir,
+                #         "pcd_{:06d}.ply".format(
+                #             state_id
+                #         )
+                #     ), pcd
+                # )
+                # 存为 npz 文件
+                np.savez_compressed(os.path.join(pc_dir,'%06d_pc.npz'%(state_id)),
+                    pc=points_data)
+
+                # save vote
+                point_votes = np.zeros((pcd_num, 4))  # bool,dx,dy,dz
+                indices = np.arange(pcd_num)
+                try:
+                    # bbox 角点坐标：8, 3
+                    box3d_pts_3d = syn_utils.compute_box_3d(bbox_writer[0,0:3],
+                        np.array([target_l,target_w,target_h]), bbox_writer[0,3])
+                    # bbox 内的点云；inds (1,pcd_num) true/false
+                    pc_in_box3d, inds = syn_utils.extract_pc_in_box3d(
+                        points_data, box3d_pts_3d)
+                    # 填充第一位
+                    point_votes[inds,0] = 1
+                    # 计算 votes
+                    votes = np.expand_dims(bbox_writer[0,0:3],0) - pc_in_box3d[:,0:3]
+                    sparse_inds = indices[inds]
+                    for i in range(len(sparse_inds)):
+                        j = sparse_inds[i]
+                        point_votes[j, 1:4] = votes[i,:]
+                except:
+                    logger.info('ERROR ---- save vote fail')
+                np.savez_compressed(os.path.join(pc_dir, '%06d_votes.npz'%(state_id)),
+                    point_votes = point_votes)
+
+
 
                 # delete action objects
                 for obj_state in state.obj_states:
@@ -261,7 +308,7 @@ if __name__ == "__main__":
         "cfg/generate_mask_dataset.yaml"
     )
 
-    # turn relative paths absolute
+    # 转换为绝对路径
     if not os.path.isabs(config_filename):
         config_filename = os.path.join(os.getcwd(), config_filename)
 
